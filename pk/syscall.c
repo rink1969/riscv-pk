@@ -422,6 +422,157 @@ static int sys_stub_nosys()
   return -ENOSYS;
 }
 
+// for ckb vm
+
+/*
+The arguments used here are:
+
+addr: a pointer to a buffer in VM memory space denoting where we would load the serialized transaction data.
+len: a pointer to a 64-bit unsigned integer in VM memory space, when calling the syscall, this memory location should store the length of the buffer specified by addr, when returning from the syscall, CKB VM would fill in len with the actual length of the buffer. We would explain the exact logic below.
+offset: an offset specifying from which offset we should start loading the serialized transaction data.
+*/
+static int sys_load_tx(void* addr, uint64_t* len, size_t offset)
+{
+  int fd = sys_open("data/tx", 0 /*O_RDONLY*/, S_IRUSR);
+  if (fd < 0) {
+    return fd;
+  }
+  int r = sys_pread(fd, addr, (size_t)(*len), offset);
+  if (r < 0) {
+    return r;
+  }
+  *len = r;
+  return 0;
+}
+
+/*
+The arguments used here are:
+
+addr: the exact same addr pointer as used in Load Transaction syscall.
+len: the exact same len pointer as used in Load Transaction syscall.
+offset: the exact same offset value as used in Load Transaction syscall.
+index: an index value denoting the index of cells to read.
+source: a flag denoting the source of cells to locate, possible values include:
+0: current cell, in this case index value would be ignored since there's only one current cell.
+1: input cells.
+2: output cells.
+3: dep cells.
+*/
+static int sys_load_cell(void* addr, uint64_t* len, size_t offset, size_t index, size_t source)
+{
+  char buf[256];
+  memset(buf, 0, 256);
+  int fd;
+  if (source == 0) {
+    fd = sys_open("data/cell_0", 0 /*O_RDONLY*/, S_IRUSR);
+  } else {
+    snprintf(buf, 256, "data/cell_%ld_%ld", index, source);
+    fd = sys_open(buf, 0 /*O_RDONLY*/, S_IRUSR);
+  }
+
+  if (fd < 0) {
+    return 2;
+  }
+  int r = sys_pread(fd, addr, (size_t)(*len), offset);
+  if (r < 0) {
+    return r;
+  }
+  *len = r;
+  return 0;
+}
+
+/*
+The arguments used here are:
+
+addr: the exact same addr pointer as used in Load Transaction syscall.
+len: the exact same len pointer as used in Load Transaction syscall.
+offset: the exact same offset value as used in Load Transaction syscall.
+index: an index value denoting the index of cells to read.
+source: a flag denoting the source of cells to locate, possible values include:
+0: current cell, in this case index value would be ignored since there's only one current cell.
+1: input cells.
+2: output cells.
+3: dep cells.
+field: a flag denoting the field of the cell to read, possible values include:
+0: capacity.
+1: data.
+2: data hash.
+3: lock hash.
+4: type.
+5: type hash.
+6: lock
+*/
+static int sys_load_cell_by_field(void* addr, uint64_t* len, size_t offset, size_t index, size_t source, size_t field)
+{
+  char buf[256];
+  memset(buf, 0, 256);
+  int fd;
+  if (source == 0) {
+    snprintf(buf, 256, "data/cell_field_0_%ld", field);
+    fd = sys_open(buf, 0 /*O_RDONLY*/, S_IRUSR);
+  } else {
+    snprintf(buf, 256, "data/cell_field_%ld_%ld_%ld", index, source, field);
+    fd = sys_open(buf, 0 /*O_RDONLY*/, S_IRUSR);
+  }
+  if (fd < 0) {
+    return 2;
+  }
+  int r = sys_pread(fd, addr, (size_t)(*len), offset);
+  if (r < 0) {
+    return r;
+  }
+  *len = r;
+  return 0;
+}
+/*
+The arguments used here are:
+
+addr: the exact same addr pointer as used in Load Transaction syscall.
+len: the exact same len pointer as used in Load Transaction syscall.
+offset: the exact same offset value as used in Load Transaction syscall.
+index: an index value denoting the index of inputs to read.
+source: a flag denoting the source of inputs to locate, possible values include:
+0: current input, in this case index value would be ignored since there's only one current input.
+1: inputs.
+2: outputs, note this is here to maintain compatibility of source flag, when this value is used in Load Input By Field syscall, the syscall would always return 2 since output doesn't have any input fields.
+3: deps, when this value is used, the syscall will also always return 2 since dep doesn't have input fields.
+field: a flag denoting the field of the input to read, possible values include:
+0: args.
+1: out_point.
+*/
+static int sys_load_input_by_field(void* addr, uint64_t* len, size_t offset, size_t index, size_t source, size_t field)
+{
+  char buf[256];
+  memset(buf, 0, 256);
+  int fd;
+  if (source == 0) {
+    snprintf(buf, 256, "data/input_field_0_%ld", field);
+    fd = sys_open(buf, 0 /*O_RDONLY*/, S_IRUSR);
+  } else {
+    snprintf(buf, 256, "data/input_field_%ld_%ld_%ld", index, source, field);
+    fd = sys_open(buf, 0 /*O_RDONLY*/, S_IRUSR);
+  }
+  if (fd < 0) {
+    return 2;
+  }
+  int r = sys_pread(fd, addr, (size_t)(*len), offset);
+  if (r < 0) {
+    return r;
+  }
+  *len = r;
+  return 0;
+}
+
+static int sys_debug(const char* buf)
+{
+  char * prefix = "debug: ";
+  char * newline = "\n";
+  sys_write(1, prefix, strlen(prefix));
+  sys_write(1, buf, strlen(buf));
+  sys_write(1, newline, strlen(newline));
+  return 0;
+}
+
 long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, unsigned long n)
 {
   const static void* syscall_table[] = {
@@ -485,12 +636,22 @@ long do_syscall(long a0, long a1, long a2, long a3, long a4, long a5, unsigned l
     [-OLD_SYSCALL_THRESHOLD + SYS_time] = sys_time,
   };
 
+  const static void* ckb_syscall_table[] = {
+    [-CKB_SYSCALL_THRESHOLD + SYS_load_tx] = sys_load_tx,
+    [-CKB_SYSCALL_THRESHOLD + SYS_load_cell] = sys_load_cell,
+    [-CKB_SYSCALL_THRESHOLD + SYS_load_cell_by_field] = sys_load_cell_by_field,
+    [-CKB_SYSCALL_THRESHOLD + SYS_load_input_by_field] = sys_load_input_by_field,
+    [-CKB_SYSCALL_THRESHOLD + SYS_debug] = sys_debug,
+  };
+
   syscall_t f = 0;
 
   if (n < ARRAY_SIZE(syscall_table))
     f = syscall_table[n];
   else if (n - OLD_SYSCALL_THRESHOLD < ARRAY_SIZE(old_syscall_table))
     f = old_syscall_table[n - OLD_SYSCALL_THRESHOLD];
+  else if (n - CKB_SYSCALL_THRESHOLD < ARRAY_SIZE(ckb_syscall_table))
+    f = ckb_syscall_table[n - CKB_SYSCALL_THRESHOLD];
 
   if (!f)
     panic("bad syscall #%ld!",n);

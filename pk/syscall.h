@@ -64,6 +64,14 @@
 #define SYS_lstat 1039
 #define SYS_time 1062
 
+// for ckb vm
+#define CKB_SYSCALL_THRESHOLD 2048
+#define SYS_load_tx 2049
+#define SYS_load_cell 2053
+#define SYS_load_cell_by_field 2054
+#define SYS_load_input_by_field 2055
+#define SYS_debug 2177
+
 #define IS_ERR_VALUE(x) ((unsigned long)(x) >= (unsigned long)-4096)
 #define ERR_PTR(x) ((void*)(long)(x))
 #define PTR_ERR(x) ((long)(x))
